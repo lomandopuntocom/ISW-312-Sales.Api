@@ -1,0 +1,26 @@
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Sales.Api.Application.Dtos;
+using Sales.Api.Infrastructure.Persistence;
+
+namespace Sales.Api.Controllers;
+
+[ApiController]
+[Route("api/sales/companies/{companyCen}/waiters")]
+public sealed class WaitersController(SalesDbContext db) : SalesControllerBase(db)
+{
+    [HttpGet]
+    public async Task<IActionResult> GetWaiters(string companyCen)
+    {
+        var company = await FindOrCreateCompanyAsync(companyCen);
+        if (company is null) return NotFound();
+
+        var waiters = await Db.Vendors
+            .Where(x => x.CompanyCen == company.Cen && x.IsWaiter && x.Active)
+            .OrderBy(x => x.Name)
+            .Select(x => new WaiterDto(x.Cen.ToString(), x.Name, x.Email, x.Phone))
+            .ToListAsync();
+
+        return Ok(waiters);
+    }
+}

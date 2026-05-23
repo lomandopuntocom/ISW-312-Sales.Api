@@ -58,4 +58,19 @@ public sealed class InventoryCatalogClient(HttpClient httpClient) : IInventoryCa
 
         return response.IsSuccessStatusCode;
     }
+
+    private sealed record StockValidationResponse(bool Available, decimal Quantity);
+
+    public async Task<bool> ValidateStockAsync(string companyCen, string productCen, decimal quantity, CancellationToken cancellationToken)
+    {
+        var response = await httpClient.PostAsJsonAsync(
+            $"/api/inventory/companies/{companyCen}/stock/validate",
+            new { productCen, quantity },
+            cancellationToken);
+
+        if (!response.IsSuccessStatusCode) return false;
+
+        var result = await response.Content.ReadFromJsonAsync<StockValidationResponse>(cancellationToken);
+        return result?.Available ?? false;
+    }
 }

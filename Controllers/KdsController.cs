@@ -30,12 +30,27 @@ public sealed class KdsController(SalesDbContext db) : SalesControllerBase(db)
         var company = await FindOrCreateCompanyAsync(companyCen);
         if (company is null || !TryParseCen(teamCen, out var team)) return NotFound();
 
-        var items = await Db.CommandItems
-            .Where(x => Db.Commands.Any(c => c.Id == x.CommandId && c.CompanyCen == company.Cen && c.StationCen == team) && x.Status != "READY")
+        var commands = await Db.Commands
+            .Include(x => x.Items)
+            .Where(x => x.CompanyCen == company.Cen && x.StationCen == team && x.Items.Any(i => i.Status != "READY"))
             .OrderBy(x => x.CreatedAt)
-            .Select(x => new KdsItemDto(x.TicketItemCen.ToString(), x.ProductCen.ToString(), x.Quantity, x.Status, x.Notes))
             .ToListAsync();
 
-        return Ok(items);
+        var result = commands.Select(c => new
+        {
+            id = c.Cen.ToString(),
+            ticketId = c.TicketCen.ToString(),
+            fechaEnvio = c.SentAt ?? c.CreatedAt,
+            items = c.Items.Where(i => i.Status != "READY").Select(i => new
+            {
+                id = i.TicketItemCen.ToString(),
+                producto = i.ProductCen.ToString(),
+                cantidad = i.Quantity,
+                estado = i.Status,
+                nota = i.Notes
+            }).ToList()
+        }).ToList();
+
+        return Ok(result);
     }
 }

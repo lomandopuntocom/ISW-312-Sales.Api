@@ -1,7 +1,7 @@
 namespace Sales.Api.Application.Dtos;
 
 public sealed record PagedResultDto<T>(IReadOnlyList<T> Items, int Total, int Page, int PageSize);
-public sealed record CatalogProductDto(string Cen, string Code, string Sku, string Name, decimal Price, bool Active, bool IsOutOfStock, string? StationCode);
+public sealed record CatalogProductDto(string Cen, string Code, string Sku, string Name, decimal Price, bool Active, bool IsOutOfStock, string? StationCode, bool TrackStock = false);
 public sealed record WaiterDto(string Cen, string Name, string? Email, string? Phone);
 public sealed record TicketDto(string Cen, string TicketNumber, string Status, string? TableCode, string? WaiterCen, int ItemCount);
 public sealed record TicketItemDto(string Cen, string ProductCen, string ProductCode, decimal Quantity, decimal UnitPrice, string Status, string? Notes);

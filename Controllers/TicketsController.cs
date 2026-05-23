@@ -75,15 +75,32 @@ public sealed class TicketsController(SalesDbContext db, IInventoryCatalogClient
         if (!TryParseCen(request.ProductCen, out var productCen)) return BadRequest("Invalid product CEN.");
         if (!TryNormalizeQuantity(request.Quantity, out var quantity, out var quantityError)) return BadRequest(quantityError);
 
+        var products = await inventoryClient.LookupProductsAsync(companyCen, [request.ProductCen], cancellationToken);
+        var product = products.FirstOrDefault();
+        if (product is null) return NotFound("Product not found in inventory.");
+
         var existing = ticket.Items.FirstOrDefault(x => x.ProductCen == productCen);
         if (existing is not null)
         {
+            var targetQuantity = existing.Quantity + quantity;
+            if (product.TrackStock)
+            {
+                var hasStock = await inventoryClient.ValidateStockAsync(companyCen, request.ProductCen, targetQuantity, cancellationToken);
+                if (!hasStock) return Conflict("No hay suficiente stock para este producto.");
+            }
+
             existing.Quantity += quantity;
             if (!string.IsNullOrWhiteSpace(request.Notes)) existing.Notes = request.Notes;
             await Db.SaveChangesAsync();
 
             var mergedCodes = await ResolveProductCodesAsync(companyCen, [existing.ProductCen.ToString()], cancellationToken);
             return Ok(ToItemDto(existing, mergedCodes));
+        }
+
+        if (product.TrackStock)
+        {
+            var hasStock = await inventoryClient.ValidateStockAsync(companyCen, request.ProductCen, quantity, cancellationToken);
+            if (!hasStock) return Conflict("No hay suficiente stock para este producto.");
         }
 
         var item = new TicketItem
@@ -122,6 +139,16 @@ public sealed class TicketsController(SalesDbContext db, IInventoryCatalogClient
 
         if (!TryNormalizeQuantity(request.Quantity, out var quantity, out var quantityError)) return BadRequest(quantityError);
 
+        var products = await inventoryClient.LookupProductsAsync(companyCen, [item.ProductCen.ToString()], cancellationToken);
+        var product = products.FirstOrDefault();
+        if (product is null) return NotFound("Product not found in inventory.");
+
+        if (product.TrackStock)
+        {
+            var hasStock = await inventoryClient.ValidateStockAsync(companyCen, item.ProductCen.ToString(), quantity, cancellationToken);
+            if (!hasStock) return Conflict("No hay suficiente stock para este producto.");
+        }
+
         item.Quantity = quantity;
         item.Notes = request.Notes;
         item.Status = request.Status ?? item.Status;
@@ -146,13 +173,91 @@ public sealed class TicketsController(SalesDbContext db, IInventoryCatalogClient
     }
 
     [HttpPost("{ticketCen}/send")]
-    public async Task<IActionResult> SendToKitchen(string companyCen, string ticketCen)
+    public async Task<IActionResult> SendToKitchen(string companyCen, string ticketCen, CancellationToken cancellationToken)
     {
         var ticket = await FindTicketAsync(companyCen, ticketCen);
         if (ticket is null) return NotFound();
 
-        foreach (var item in ticket.Items.Where(x => x.Status == "PENDING"))
-            item.Status = "SENT";
+        var pendingItems = ticket.Items.Where(x => x.Status == "PENDING").ToList();
+        if (pendingItems.Count == 0) return Ok(new { ticketCen = ticket.Cen, status = ticket.Status });
+
+        var productCens = pendingItems.Select(x => x.ProductCen.ToString()).Distinct().ToList();
+        var products = await inventoryClient.LookupProductsAsync(companyCen, productCens, cancellationToken);
+        var productStations = products.ToDictionary(x => x.Cen, x => x.StationCode, StringComparer.OrdinalIgnoreCase);
+
+        var groupedItems = pendingItems
+            .GroupBy(x => productStations.GetValueOrDefault(x.ProductCen.ToString()))
+            .Where(g => !string.IsNullOrWhiteSpace(g.Key))
+            .ToList();
+
+        if (groupedItems.Count == 0)
+        {
+            foreach (var item in pendingItems) item.Status = "SENT";
+            await Db.SaveChangesAsync();
+            return Ok(new { ticketCen = ticket.Cen, status = "SENT" });
+        }
+
+        var stationCodes = groupedItems.Select(x => x.Key!).ToList();
+        var stationsList = await Db.CommandStations
+            .Where(x => x.CompanyCen == ticket.CompanyCen)
+            .ToListAsync();
+
+        var nextNumber = await Db.Commands.CountAsync(x => x.CompanyCen == ticket.CompanyCen) + 1;
+
+        foreach (var group in groupedItems)
+        {
+            var stationCode = group.Key!;
+            var station = stationsList.FirstOrDefault(x => 
+                x.Cen.ToString().Equals(stationCode, StringComparison.OrdinalIgnoreCase) ||
+                x.Code.Equals(stationCode, StringComparison.OrdinalIgnoreCase) ||
+                x.Name.Equals(stationCode, StringComparison.OrdinalIgnoreCase) ||
+                x.StationType.Equals(stationCode, StringComparison.OrdinalIgnoreCase) ||
+                (stationCode.Equals("COCINA", StringComparison.OrdinalIgnoreCase) && x.StationType == "KITCHEN") ||
+                (stationCode.Equals("BAR", StringComparison.OrdinalIgnoreCase) && x.StationType == "BAR")
+            );
+
+            if (station is null)
+            {
+                foreach (var item in group) item.Status = "SENT";
+                continue;
+            }
+
+            var command = new Command
+            {
+                CompanyId = ticket.CompanyId,
+                CompanyCen = ticket.CompanyCen,
+                LocationId = ticket.LocationId,
+                LocationCen = ticket.LocationCen,
+                TicketId = ticket.Id,
+                TicketCen = ticket.Cen,
+                StationId = station.Id,
+                StationCen = station.Cen,
+                CommandNumber = $"CMD-{nextNumber:0000}",
+                Status = "PENDING",
+                IsReorder = false,
+                SentAt = DateTime.UtcNow
+            };
+
+            Db.Commands.Add(command);
+
+            foreach (var item in group)
+            {
+                item.Status = "SENT";
+                command.Items.Add(new CommandItem
+                {
+                    CommandCen = command.Cen,
+                    TicketItemId = item.Id,
+                    TicketItemCen = item.Cen,
+                    ProductId = item.ProductId,
+                    ProductCen = item.ProductCen,
+                    Quantity = item.Quantity,
+                    Status = "PENDING",
+                    Notes = item.Notes
+                });
+            }
+
+            nextNumber++;
+        }
 
         await Db.SaveChangesAsync();
         return Ok(new { ticketCen = ticket.Cen, status = "SENT" });

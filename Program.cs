@@ -3,15 +3,23 @@ using Sales.Api.Infrastructure.Inventory;
 using Sales.Api.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Scalar.AspNetCore; // 👈 Agregar
+using DotNetEnv;
+
+// Load .env from root directory
+var envPath = Path.Combine(Directory.GetCurrentDirectory(), "..", ".env");
+DotNetEnv.Env.Load(Path.GetFullPath(envPath));
 
 var builder = WebApplication.CreateBuilder(args);
 
-var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
-    ?? Environment.GetEnvironmentVariable("DATABASE_CONNECTION")
-    ?? throw new InvalidOperationException("Missing DefaultConnection or DATABASE_CONNECTION.");
+var dbHost = Environment.GetEnvironmentVariable("DATABASE_HOST") ?? "localhost";
+var dbPort = Environment.GetEnvironmentVariable("DATABASE_PORT") ?? "5432";
+var dbName = Environment.GetEnvironmentVariable("DATABASE_NAME") ?? throw new InvalidOperationException("DATABASE_NAME not configured");
+var dbUser = Environment.GetEnvironmentVariable("DATABASE_USER") ?? throw new InvalidOperationException("DATABASE_USER not configured");
+var dbPassword = Environment.GetEnvironmentVariable("DATABASE_PASSWORD") ?? throw new InvalidOperationException("DATABASE_PASSWORD not configured");
 
-var inventoryBaseUrl = builder.Configuration["Services:InventoryApi"]
-    ?? Environment.GetEnvironmentVariable("INVENTORY_API_URL")
+var connectionString = $"Host={dbHost};Port={dbPort};Database={dbName};Username={dbUser};Password={dbPassword}";
+
+var inventoryBaseUrl = Environment.GetEnvironmentVariable("INVENTORY_API_URL")
     ?? "http://localhost:5143";
 
 builder.Services.AddControllers();
@@ -28,10 +36,10 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
     {
-        var origins = builder.Configuration.GetSection("Cors:Origins").Get<string[]>()
+        var corsOrigins = Environment.GetEnvironmentVariable("CORS_ORIGINS")?.Split(";") 
             ?? ["http://localhost:5173"];
 
-        policy.WithOrigins(origins)
+        policy.WithOrigins(corsOrigins)
             .AllowAnyHeader()
             .AllowAnyMethod();
     });

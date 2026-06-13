@@ -15,3 +15,9 @@ public sealed record AssignWaiterRequest(string WaiterCen);
 public sealed record UpdateKdsStatusRequest(string Status);
 public sealed record PaymentRequest(string PaymentMethod, decimal Amount, string? Reference, string? PaidBy);
 public sealed record TaxConfigurationDto(decimal TaxRate);
+
+public sealed record CreateKdsTeamContractRequest(string Name, IReadOnlyList<string> CategoryCens);
+public sealed record KdsTeamContractResponse(string TeamCen, string Name, IReadOnlyList<string> CategoryCens);
+public sealed record CreateWaiterContractRequest(string Name);
+public sealed record WaiterContractResponse(string WaiterCen, string Name);
+

@@ -4,6 +4,8 @@ using Sales.Api.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Scalar.AspNetCore; // 👈 Agregar
 using DotNetEnv;
+using Polly;
+using Polly.Extensions.Http;
 
 // Load .env from current directory or parent directory
 var envPath = Path.Combine(Directory.GetCurrentDirectory(), ".env");
@@ -18,26 +20,42 @@ if (File.Exists(envPath))
 
 var builder = WebApplication.CreateBuilder(args);
 
-var dbHost = Environment.GetEnvironmentVariable("DATABASE_HOST") ?? "localhost";
-var dbPort = Environment.GetEnvironmentVariable("DATABASE_PORT") ?? "5432";
-var dbName = Environment.GetEnvironmentVariable("DATABASE_NAME") ?? throw new InvalidOperationException("DATABASE_NAME not configured");
-var dbUser = Environment.GetEnvironmentVariable("DATABASE_USER") ?? throw new InvalidOperationException("DATABASE_USER not configured");
-var dbPassword = Environment.GetEnvironmentVariable("DATABASE_PASSWORD") ?? throw new InvalidOperationException("DATABASE_PASSWORD not configured");
+var connectionString = Environment.GetEnvironmentVariable("DB_CONNECTION_STRING");
+if (string.IsNullOrEmpty(connectionString))
+{
+    var dbHost = Environment.GetEnvironmentVariable("DATABASE_HOST") ?? "localhost";
+    var dbPort = Environment.GetEnvironmentVariable("DATABASE_PORT") ?? "5432";
+    var dbName = Environment.GetEnvironmentVariable("DATABASE_NAME") ?? throw new InvalidOperationException("DATABASE_NAME not configured");
+    var dbUser = Environment.GetEnvironmentVariable("DATABASE_USER") ?? throw new InvalidOperationException("DATABASE_USER not configured");
+    var dbPassword = Environment.GetEnvironmentVariable("DATABASE_PASSWORD") ?? throw new InvalidOperationException("DATABASE_PASSWORD not configured");
 
-var connectionString = $"Host={dbHost};Port={dbPort};Database={dbName};Username={dbUser};Password={dbPassword}";
+    connectionString = $"Host={dbHost};Port={dbPort};Database={dbName};Username={dbUser};Password={dbPassword}";
+}
 
 var inventoryBaseUrl = Environment.GetEnvironmentVariable("INVENTORY_API_URL")
     ?? "http://localhost:5143";
 
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
+builder.Services.AddExceptionHandler<Sales.Api.Infrastructure.GlobalExceptionHandler>();
+builder.Services.AddProblemDetails();
 builder.Services.AddDbContext<SalesDbContext>(options =>
     options.UseNpgsql(connectionString, npgsql =>
         npgsql.MigrationsHistoryTable("__EFMigrationsHistory", "sales")));
+var retryPolicy = HttpPolicyExtensions
+    .HandleTransientHttpError()
+    .WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)));
+
+var circuitBreakerPolicy = HttpPolicyExtensions
+    .HandleTransientHttpError()
+    .CircuitBreakerAsync(5, TimeSpan.FromSeconds(30));
+
 builder.Services.AddHttpClient<IInventoryCatalogClient, InventoryCatalogClient>(client =>
 {
     client.BaseAddress = new Uri(inventoryBaseUrl);
-});
+})
+.AddPolicyHandler(retryPolicy)
+.AddPolicyHandler(circuitBreakerPolicy);
 
 builder.Services.AddCors(options =>
 {
@@ -135,5 +153,6 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors("AllowFrontend");
+app.UseExceptionHandler();
 app.MapControllers();
 app.Run();

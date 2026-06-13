@@ -1,0 +1,12 @@
+**/.git
+**/.vs
+**/.vscode
+**/bin
+**/obj
+**/.husky
+**/.config
+.env
+.env.development
+appsettings.Development.json
+docker-compose.yml
+Dockerfile

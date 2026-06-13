@@ -21,6 +21,34 @@ public sealed class DashboardController(SalesDbContext db) : SalesControllerBase
         return Ok(new { total, date = DateOnly.FromDateTime(DateTime.UtcNow) });
     }
 
+    [HttpGet("monthly")]
+    public async Task<IActionResult> MonthlySales(string companyCen)
+    {
+        var company = await FindOrCreateCompanyAsync(companyCen);
+        if (company is null) return NotFound();
+
+        var now = DateTime.UtcNow;
+        var startOfCurrentMonth = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+        var endOfCurrentMonth = startOfCurrentMonth.AddMonths(1).AddTicks(-1);
+
+        var startOfPreviousMonth = startOfCurrentMonth.AddMonths(-1);
+        var endOfPreviousMonth = startOfCurrentMonth.AddTicks(-1);
+
+        var currentMonthTotal = await Db.Payments
+            .Where(x => Db.Tickets.Any(t => t.Id == x.TicketId && t.CompanyCen == company.Cen) && x.CreatedAt >= startOfCurrentMonth && x.CreatedAt <= endOfCurrentMonth)
+            .SumAsync(x => (decimal?)x.Amount) ?? 0;
+
+        var previousMonthTotal = await Db.Payments
+            .Where(x => Db.Tickets.Any(t => t.Id == x.TicketId && t.CompanyCen == company.Cen) && x.CreatedAt >= startOfPreviousMonth && x.CreatedAt <= endOfPreviousMonth)
+            .SumAsync(x => (decimal?)x.Amount) ?? 0;
+
+        return Ok(new
+        {
+            currentMonthSales = currentMonthTotal,
+            previousMonthSales = previousMonthTotal
+        });
+    }
+
     [HttpGet("top-products")]
     public async Task<IActionResult> TopProducts(string companyCen)
     {
